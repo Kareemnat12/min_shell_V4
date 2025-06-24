@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include "sim_mem.h"
+
 /////// PRE DEFINITIONS ///////
 
 typedef struct {
@@ -40,9 +41,8 @@ typedef struct sim_database {
     int tlb_size;
 } sim_database;
 
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
+
+//////////////////////////////// PRINT FUNCTIONS ///////////////////////
 
 /**
  * print_memory - Prints the contents of the main memory (RAM)
@@ -224,16 +224,20 @@ void print_tlb(sim_database* mem_sim) {
     }
     printf("====================\n\n");
 }
-
-
 ///////////////////////////////////////////////////////////
+
+
+
+
+//////// SIMULATION MEMORY SYSTEM /////////
 
 // === GLOBAL CONFIG VARIABLES ===
 char exe_file[256];
 char swap_file[256];
 int text_size, data_size, bss_size, heap_stack_size;
 int page_size, num_pages, memory_size, swap_size;
-
+int text_pages, data_pages, bss_pages , heap_stack_pages;
+int offset , page_number, frame_number;
 
 // parse_script_header - Reads the first line of the script file
 int parse_script_header(FILE* script) {
@@ -258,14 +262,7 @@ int parse_script_header(FILE* script) {
 
 
 
-sim_database* init_system(
-        char exe_file_name[],
-        char swap_file_name[],
-        int text_size,
-        int data_size,
-        int bss_size,
-        int heap_stack_size
-) {
+sim_database* init_system(char exe_file_name[],char swap_file_name[],int text_size,int data_size,int bss_size,int heap_stack_size) {
     sim_database* db = (sim_database*)malloc(sizeof(sim_database));
     if (!db) {
         perror("malloc sim_database failed");
@@ -345,4 +342,85 @@ sim_database* init_system(
     }
 
     return db;
+}
+
+
+///// The get_segment function determines which segment a given page number belongs to ///////
+const char* get_segment(sim_database* mem_sim, int page_num) {
+    int text_pages = (mem_sim->text_size + mem_sim->page_size - 1) / mem_sim->page_size;
+    int data_pages = (mem_sim->data_size + mem_sim->page_size - 1) / mem_sim->page_size;
+    int bss_pages  = (mem_sim->bss_size  + mem_sim->page_size - 1) / mem_sim->page_size;
+    int heap_stack_pages = (mem_sim->heap_stack_size + mem_sim->page_size - 1) / mem_sim->page_size;
+
+    // Start page indices
+    int text_start = 0;
+    int data_start = text_start + text_pages;
+    int bss_start  = data_start + data_pages;
+    int hs_start   = bss_start + bss_pages;
+
+    if (page_num < data_start) {
+        return "TEXT";
+    } else if (page_num < bss_start) {
+        return "DATA";
+    } else if (page_num < hs_start) {
+        return "BSS";
+    } else {
+        return "Heap_Stack"; // Heap / Stack
+    }
+}
+
+
+char load(sim_database* mem_sim, int address) {
+    // Total virtual space = num_pages * page_size
+    int total_size = mem_sim->num_pages * mem_sim->page_size;
+
+    // 1. Check address validity
+    if (address < 0 || address >= total_size) {
+        fprintf(stderr, "Error: Invalid address %d (out of range)\n", address);
+        return '-';
+    }
+    // 2. Compute page & offset into local vars
+    int page, offset;
+    calculate_page_offset(mem_sim, address, &page, &offset);
+
+
+    // 3. If page is already in RAM (V == 1), just read and return:
+    if (mem_sim->page_table[page].V == 1) {
+        // Grab the physical frame number from the page table
+        int frame = mem_sim->page_table[page].frame_swap;
+        // Compute the physical address: frame × page_size + offset
+        int phys_addr = frame * mem_sim->page_size + offset;
+        // Return the byte stored there
+        return mem_sim->main_memory[phys_addr];
+    }
+    // Otherwise, handle page fault…
+
+
+
+
+
+}
+
+
+// static so it’s private to sim_mem.c
+static void calculate_page_offset(sim_database* mem_sim,
+                                  int address,
+                                  int *out_page,
+                                  int *out_offset) {
+    // page_size must be a power-of-two per spec
+    int shift = __builtin_ctz(mem_sim->page_size);
+    *out_page   = address >> shift;
+    *out_offset = address & (mem_sim->page_size - 1);
+}
+
+
+
+
+
+
+
+
+//////////// MAIN FUNCTION ////////////
+int main(){
+    printf("Memory Simulation System\n");
 }
