@@ -1,1 +1,7 @@
 prog.bin swap.bin 64 32 16 48 8 20 40 80
+load 0
+load 80
+store 100 A
+store 140 B
+print table
+print ram

@@ -12,6 +12,11 @@
 #include <asm-generic/errno-base.h>
 #include <errno.h>
 #include <pthread.h>
+#define _POSIX_C_SOURCE 199309L
+#include <time.h>
+#include <signal.h>      // sigaction, sigemptyset, SIGXFSZ
+#include <time.h>        // clock_gettime, CLOCK_MONOTONIC
+#include <string.h>      // strsignal, strdup, strcasecmp
 
 /**** CONSTANTS ****/
 #define MAX_INPUT_LENGTH 1024
@@ -46,6 +51,8 @@ char* trim_inplace(char* str);
 void free_args(char **args);
 int pipe_split(char *input, char *left_cmd, char *right_cmd);
 void strip_crlf(char *str);
+/* forward‐declaration of the function you put in sim_mem.c */
+extern int vmem_do(const char *script_path);
 
 // File operations
 char** read_file_lines(const char* filename, int* num_lines);
@@ -1185,6 +1192,14 @@ int main(int argc, char* argv[]) {
                 r_args = NULL;
                 continue;
             }
+        }
+        if (strcmp(l_args[0], "vmem") == 0) {
+            if (l_args_len != 2) {
+                printf("Usage: vmem <script_file>\n");
+            } else if (!vmem_do(l_args[1])) {
+                fprintf(stderr, "vmem failed on %s\n", l_args[1]);
+            }
+            continue;
         }
 
         // Check argument count

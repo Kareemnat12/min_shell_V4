@@ -41,11 +41,7 @@ typedef struct sim_database {
     int num_frames;
     int tlb_size;
 } sim_database;
-////////////////////////////////FUNCTION DECLARATIONS ///////////////////////
-static void calculate_page_offset(sim_database* mem_sim,
-                                  int address,
-                                  int *out_page,
-                                  int *out_offset);
+
 
 //////////////////////////////// PRINT FUNCTIONS ///////////////////////
 
@@ -249,7 +245,13 @@ int page_size, num_pages, memory_size, swap_size;
 int text_pages_count,data_pages_count,bss_pages_count,heap_stack_pages_count;
 int total_size; // Total virtual memory size in bytes
 int* frame_time;
-int timestamp = 1;
+int timestamp ;
+static int *swap_map = NULL;    // 0 = free, 1 = used
+
+int frame_evic(sim_database* db) ;
+
+int moveToSwap(sim_database *db, int p);
+
 // parse_script_header - Reads the first line of the script file
 int parse_script_header(FILE* script) {
     char line[512];
@@ -366,15 +368,17 @@ sim_database* init_system(const char* script_path) {
 
     fclose(script);
     // Total virtual space = num_pages * page_size
-     total_size = db->num_pages * db->page_size;
-    frame_time = malloc(db->num_frames * sizeof(int));// make the allocation if its not worked
-    if (!frame_time) {
-        perror("Error allocating frame time array");
-        close(db->program_fd);
-        close(db->swapfile_fd);
-        free(db->main_memory);
-        free(db->page_table);
-        free(db);
+    total_size = db->num_pages * db->page_size;
+    //initilize nessceary stuff
+    timestamp   = 1;
+    frame_time  = malloc(db->num_frames * sizeof *frame_time);
+    if (!frame_time) { perror("alloc"); return NULL; }
+    for (int i = 0; i < db->num_frames; i++) frame_time[i] = 0;
+///
+    int num_swap_pages = db->swap_size / db->page_size;
+    swap_map = calloc(num_swap_pages, sizeof *swap_map);
+    if (!swap_map) {
+        perror("Error allocating swap map");
         return NULL;
     }
     return db;
@@ -388,34 +392,16 @@ void clear_system(sim_database* db) {
     free(db->main_memory);
     free(db->page_table);
     free(db->tlb);
+
+    // free our globals
+    free(frame_time);
+    free(swap_map);
+
     free(db);
 }
 
 
-///// The get_segment function determines which segment a given page number belongs to ///////
-//const char* get_segment(sim_database* mem_sim, int page_num) {
-//     text_pages = (mem_sim->text_size + mem_sim->page_size - 1) / mem_sim->page_size;
-//     data_pages = (mem_sim->data_size + mem_sim->page_size - 1) / mem_sim->page_size;
-//     bss_pages  = (mem_sim->bss_size  + mem_sim->page_size - 1) / mem_sim->page_size;
-//     heap_stack_pages = (mem_sim->heap_stack_size + mem_sim->page_size - 1) / mem_sim->page_size;
-//
-//    // Start page indices
-//    int text_start = 0;
-//    int data_start = text_start + text_pages;
-//    int bss_start  = data_start + data_pages;
-//    int hs_start   = bss_start + bss_pages;
-//
-//    if (page_num < data_start) {
-//        return "TEXT";
-//    } else if (page_num < bss_start) {
-//        return "DATA";
-//    } else if (page_num < hs_start) {
-//        return "BSS";
-//    } else {
-//        return "Heap_Stack"; // Heap / Stack
-//    }
-//}
-//////////////////////////////////////////////////////////////
+
 
 /// power of two function ///
 int pow_of_two(int n) {
@@ -478,13 +464,14 @@ char load(sim_database* mem_sim, int address) {
             }
 
             // 3. Read the full page into a free frame in RAM
-            int frame =0 /* find a free frame index here */; // 1 for test purpose
+            int frame = frame_evic(mem_sim);
             char *dest = mem_sim->main_memory + frame * mem_sim->page_size;
             if (read(mem_sim->program_fd, dest, mem_sim->page_size)
                 != mem_sim->page_size) {
                 perror("Error reading from file");
                 return '-';
             }
+            frame_time[frame] = timestamp++;
 
             // 4. Update the page‐table entry
             mem_sim->page_table[page].V = 1;
@@ -513,14 +500,13 @@ char load(sim_database* mem_sim, int address) {
                         }
 
                         // 3. Read the full page into a free frame in RAM
-                        int frame =0 /* find a free frame index here */; // 1 for test purpose
-                        char *dest = mem_sim->main_memory + frame * mem_sim->page_size;
+                        int frame = frame_evic(mem_sim);                        char *dest = mem_sim->main_memory + frame * mem_sim->page_size;
                         if (read(mem_sim->program_fd, dest, mem_sim->page_size)
                             != mem_sim->page_size) {
                             perror("Error reading from file");
                             return '-';
                         }
-
+                        frame_time[frame] = timestamp++;
                         // 4. Update the page‐table entry
                         mem_sim->page_table[page].V = 1;
                         mem_sim->page_table[page].frame_swap = frame;
@@ -538,11 +524,11 @@ char load(sim_database* mem_sim, int address) {
                         printf("Page fault: Loading page %d with zeros\n", page);
 
                         // 2. Find a free frame index (for simplicity, we assume one is available)
-                        int frame = 0; /* find a free frame index here */ // 1 for test purpose
-                        char *dest = mem_sim->main_memory + frame * mem_sim->page_size;
+                        int frame = frame_evic(mem_sim);                        char *dest = mem_sim->main_memory + frame * mem_sim->page_size;
 
                         // 3. Fill the page with zeros
                         memset(dest, 0, mem_sim->page_size);
+                        frame_time[frame] = timestamp++;
 
                         // 4. Update the page‐table entry
                         mem_sim->page_table[page].V = 1;
@@ -572,14 +558,13 @@ char load(sim_database* mem_sim, int address) {
                     }
 
                     // 3. Read the full page into a free frame in RAM
-                    int frame =0 /* find a free frame index here */; // 1 for test purpose
-                    char *dest = mem_sim->main_memory + frame * mem_sim->page_size;
+                    int frame = frame_evic(mem_sim);                    char *dest = mem_sim->main_memory + frame * mem_sim->page_size;
                     if (read(mem_sim->swapfile_fd, dest, mem_sim->page_size)
                         != mem_sim->page_size) {
                         perror("Error reading from file");
                         return '-';
                     }
-
+                    frame_time[frame] = timestamp++;
                     // 4. Update the page‐table entry
                     mem_sim->page_table[page].V = 1;
                     mem_sim->page_table[page].frame_swap = frame;
@@ -629,41 +614,93 @@ void store(sim_database* mem_sim, int address, char value){
             mem_sim->main_memory[phys_addr] = value;
             mem_sim->page_table[page].D = 1; // Mark as dirty
             printf("Stored value '%c' at address %d\n", value, address);
+            frame_time[frame] = timestamp++;
 }
-int zero_flag = 0;
 
-int frame_evic(sim_database* mem_sim){
-    int min = frame_time[0];
-    int min_index = 0;
-    int lim= mem_sim->num_frames;
+int frame_evic(sim_database* db) {
+    int nf = db->num_frames;
 
-    for(int i=0;i<lim;i++){// handle if there is no empty frame
-        if(frame_time[i]==0)
-            zero_flag = 0;
-        else
-            zero_flag = 1;
-    }
-
-
-    //to handle the empty place frames
-    if (zero_flag==0){
-    for (int i =0; i<lim;i++){
-        if(frame_time[i]==0){
-            frame_time[i] = timestamp;
-            timestamp++;
-            return i; // Return the first free frame
-        }}}
-    for (int i = 0; i < lim; i++) {//handle the minimum stuff
-        if (frame_time[i] < min) {
-            min = frame_time[i];
-            min_index = i;
+    // 1) First, try to find a free frame (timestamp == 0)
+    for (int f = 0; f < nf; f++) {
+        if (frame_time[f] == 0) {
+            frame_time[f] = timestamp++;
+            return f;
         }
     }
 
+    // 2) No free frame: pick the LRU victim (smallest timestamp)
+    int victim = 0;
+    int min_t   = frame_time[0];
+    for (int f = 1; f < nf; f++) {
+        if (frame_time[f] < min_t) {
+            min_t   = frame_time[f];
+            victim  = f;
+        }
+    }
 
+    // 3) Locate which page currently occupies that frame
+    for (int p = 0; p < db->num_pages; p++) {
+        page_descriptor *pd = &db->page_table[p];
+        if (pd->V == 1 && pd->frame_swap == victim) {
+            // If it's a dirty, writable data page → write it to swap
+            if (pd->P == 0 && pd->D == 1) {
+                moveToSwap(db, p);
+                pd->D = 0;
+            }
+            // Evict it from RAM
+            pd->V = 0;
+            // If it was clean (text or non-dirty), drop its frame mapping
+            if (pd->D == 0) {
+                pd->frame_swap = -1;
+            }
+            break;
+        }
+    }
+
+    // 4) Reuse the victim frame for the new page
+    frame_time[victim] = timestamp++;
+    return victim;
 }
 
 
+int moveToSwap(sim_database *db, int page_num) {
+    int num_swap_pages = db->swap_size / db->page_size;
+    page_descriptor *pd = &db->page_table[page_num];
+
+    // Find first free PAGE_SIZE‐sized block in swap (first-fit) :contentReference[oaicite:0]{index=0}:contentReference[oaicite:1]{index=1}
+    int block;
+    for (block = 0; block < num_swap_pages; block++) {
+        if (swap_map[block] == 0) {
+            swap_map[block] = 1;
+            break;
+        }
+    }
+    if (block == num_swap_pages) {
+        fprintf(stderr, "Error: Swap file is full, cannot evict page %d\n", page_num);
+        return -1;
+    }
+
+    // Write the page’s current frame out to swap at offset block * PAGE_SIZE
+    off_t offset_bytes = (off_t)block * db->page_size;
+    if (lseek(db->swapfile_fd, offset_bytes, SEEK_SET) == -1) {
+        perror("Error seeking in swap file");
+        return -1;
+    }
+    // Source is the physical frame in RAM
+    int frame = pd->frame_swap;
+    char *src = db->main_memory + frame * db->page_size;
+    if (write(db->swapfile_fd, src, db->page_size) != db->page_size) {
+        perror("Error writing to swap file");
+        return -1;
+    }
+
+    // Update page table: now it lives in swap at index ‘block’ :contentReference[oaicite:2]{index=2}
+    pd->frame_swap = block;
+    pd->V = 0;      // no longer in RAM
+    pd->D = 0;      // clean in swap
+
+    return block;
+}
 
 
 void printAll(sim_database* mem_sim) {
@@ -678,11 +715,71 @@ void printAll(sim_database* mem_sim) {
 int main(){
     printf("Memory Simulation System\n");
     sim_database *db = init_system("script.txt");
-    printAll(db);
-    printf("///////////////Loading value at address 64:///////////////////\n");
-    load(db, 64);
-    printAll(db);
-    printf("///////////////Storing value 'K' at address 0://///////////////\n");
-    store(db, 64, 'K');
-    printAll(db);
+//    printAll(db);
+//    printf("///////////////Loading value at address 64:///////////////////\n");
+//    load(db, 64);
+//    printAll(db);
+//    printf("///////////////Storing value 'K' at address 0://///////////////\n");
+//    store(db, 64, 'K');
+//    printAll(db);
+   load(db, 0);
+   load(db,80);
+   store(db, 100, 'A');
+   store(db, 140, 'B');
+   printAll(db);
+
+    // Cleanup
+    clear_system(db);
+    free(frame_time);
+    free(swap_map);
+    return 0;
+}
+
+#include <ctype.h>
+
+// Execute every command in the script (after the header) on db
+void execute_script(sim_database *db, const char *script_path) {
+    FILE *script = fopen(script_path, "r");
+    if (!script) {
+        perror("Error opening script for commands");
+        return;
+    }
+
+    char line[256];
+    // 1) skip header
+    if (!fgets(line, sizeof line, script)) {
+        fclose(script);
+        return;
+    }
+
+    // 2) process each subsequent line
+    while (fgets(line, sizeof line, script)) {
+        // trim leading whitespace
+        char *p = line;
+        while (isspace((unsigned char)*p)) p++;
+
+        int addr;
+        char value;
+        if (sscanf(p, "load %d", &addr) == 1) {
+            load(db, addr);
+        }
+        else if (sscanf(p, "store %d %c", &addr, &value) == 2) {
+            store(db, addr, value);
+        }
+        else if (strncmp(p, "print table", 11) == 0) {
+            print_page_table(db);
+        }
+        else if (strncmp(p, "print ram", 9) == 0) {
+            print_memory(db);
+        }
+        else if (strncmp(p, "print swap", 10) == 0) {
+            print_swap(db);
+        }
+        else{
+            fprintf(stderr, "Error: Invalid script format\n");
+        }
+
+    }
+
+    fclose(script);
 }
