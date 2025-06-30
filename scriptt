@@ -1,0 +1,31 @@
+prog.bin my_swap.bin 64 32 16 48 8 20 40 80
+load 64
+load 72
+load 80
+load 88
+load 96
+print table
+print ram
+print swap
+store 64 A
+store 72 B
+store 80 C
+store 88 D
+store 96 E
+print table
+print ram
+print swap
+load 104
+load 112
+store 112 F
+print table
+print ram
+print swap
+load 64
+print table
+print ram
+print swap
+load 124
+print table
+print ram
+print swap

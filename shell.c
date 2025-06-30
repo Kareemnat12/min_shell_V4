@@ -12,7 +12,6 @@
 #include <asm-generic/errno-base.h>
 #include <errno.h>
 #include <pthread.h>
-#define _POSIX_C_SOURCE 199309L
 #include <time.h>
 #include <signal.h>      // sigaction, sigemptyset, SIGXFSZ
 #include <time.h>        // clock_gettime, CLOCK_MONOTONIC
@@ -1162,7 +1161,7 @@ int main(int argc, char* argv[]) {
             free_args(r_args);
             free_args(Danger_CMD);
             printf("%d\n", dangerous_cmd_blocked_count + semi_dangerous_cmd_count);
-            return 0;
+            exit(0);
         }
 
         // Handle resource limits
